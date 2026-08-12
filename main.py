@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 import psycopg2
 import psycopg2.extras
 from aiohttp import web
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, MessageHandler,
@@ -246,6 +246,15 @@ def generate_map():
     conn.close()
     return render_map_bytes()
 
+def get_font(size):
+    font_names = ["DejaVuSans-Bold.ttf", "arial.ttf", "FreeSansBold.ttf"]
+    for font_name in font_names:
+        try:
+            return ImageFont.truetype(font_name, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
 def render_map_bytes():
     conn = get_db_connection()
     with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
@@ -264,43 +273,56 @@ def render_map_bytes():
 
     max_x = max(r["x"] for r in rows)
     max_y = max(r["y"] for r in rows)
-    cell_w, cell_h = 150, 105
-    margin = 30
-    img = Image.new("RGB", (
-        (max_x+1)*cell_w + margin*2,
-        (max_y+1)*cell_h + margin*2 + 50
-    ), "white")
+    
+    cell_w, cell_h = 170, 110
+    margin = 25
+    header_h = 50
+
+    img_w = (max_x + 1) * cell_w + margin * 2
+    img_h = (max_y + 1) * cell_h + margin * 2 + header_h
+
+    # Темний стильний фон (Dark Mode)
+    img = Image.new("RGB", (img_w, img_h), "#151518")
     draw = ImageDraw.Draw(img)
+
+    font_title = get_font(20)
+    font_main = get_font(13)
+    font_sub = get_font(11)
 
     palette = {}
     colors = [
-        "#4E79A7","#F28E2B","#E15759","#76B7B2","#59A14F",
-        "#EDC949","#AF7AA1","#FF9DA7","#9C755F","#BAB0AC",
-        "#2F4B7C","#665191","#A05195","#D45087","#F95D6A",
-        "#FF7C43","#FFA600","#1B9E77","#D95F02","#7570B3",
+        "#2563EB", "#DC2626", "#059669", "#D97706", "#7C3AED",
+        "#DB2777", "#0891B2", "#65A30D", "#EA580C", "#4F46E5",
     ]
     for i, p in enumerate(users):
         palette[p["user_id"]] = colors[i % len(colors)]
 
     for r in rows:
-        x1 = margin + r["x"]*cell_w
-        y1 = margin + r["y"]*cell_h
-        x2 = x1 + cell_w - 4
-        y2 = y1 + cell_h - 4
-        fill = palette.get(r["owner_id"], "#CCCCCC")
-        draw.rectangle((x1,y1,x2,y2), fill=fill, outline="black", width=2)
-        label = f'#{r["id"]} {r["name"][:18]}'
-        draw.text((x1+5,y1+5), label, fill="black")
-        draw.text((x1+5,y1+27), f'{r["cities"]} міст • {fmt_num(r["population"])}', fill="black")
-        draw.text((x1+5,y1+49), (r["country"] or "Немає")[:22], fill="black")
+        x1 = margin + r["x"] * cell_w
+        y1 = margin + r["y"] * cell_h + header_h
+        x2 = x1 + cell_w - 8
+        y2 = y1 + cell_h - 8
 
-    draw.text((margin, (max_y+1)*cell_h + margin+10),
-              f"POLYT BATTLE • Раунд {setting('round_no')} • AI MAP ENGINE",
-              fill="black")
-    
+        fill_color = palette.get(r["owner_id"], "#27272A")
+
+        # Плитка з закругленими кутами
+        draw.rounded_rectangle((x1, y1, x2, y2), radius=10, fill=fill_color, outline="#3F3F46", width=2)
+
+        # Інформаційні тексти
+        region_id_str = f"#{r['id']}"
+        region_name = r["name"][:14]
+        country_name = (r["country"] or "Нічия")[:16]
+
+        draw.text((x1 + 10, y1 + 8), f"{region_id_str} {region_name}", fill="#FFFFFF", font=font_main)
+        draw.text((x1 + 10, y1 + 32), f"🏳️ {country_name}", fill="#F4F4F5", font=font_sub)
+        draw.text((x1 + 10, y1 + 54), f"🏙️ Міст: {r['cities']}", fill="#E4E4E7", font=font_sub)
+        draw.text((x1 + 10, y1 + 72), f"👥 {fmt_num(r['population'])}", fill="#E4E4E7", font=font_sub)
+
+    draw.text((margin, 15), f"🗺️ POLYT BATTLE MAP • Раунд {setting('round_no')}", fill="#FFFFFF", font=font_title)
+
     bio = io.BytesIO()
     bio.name = 'map.png'
-    img.save(bio, 'PNG')
+    img.save(bio, 'PNG', quality=95)
     bio.seek(0)
     return bio
 
@@ -530,7 +552,7 @@ async def send_map(message):
             await message.reply_photo(photo=bio, caption=f"🗺️ Карта • Раунд {setting('round_no')}")
         finally:
             bio.close()
-            gc.collect()  # Примусово звільняємо RAM від зображення
+            gc.collect()  # Очищаємо RAM
     else:
         await message.reply_text("🗺️ Карта ще не створена.")
 
@@ -614,7 +636,7 @@ async def handle_health_check(request):
     return web.Response(text="OK", status=200)
 
 async def start_web_server():
-    port = int(os.getenv("PORT", 8080))
+    port = int(os.get_env("PORT", 8080))
     app = web.Application()
     app.router.add_get("/", handle_health_check)
     app.router.add_get("/health", handle_health_check)
@@ -627,7 +649,6 @@ async def start_web_server():
 # -------------------- Main --------------------
 
 async def on_startup(app: Application):
-    # Запускаємо вебсервер під час старт-апу бота в правильному event loop
     await start_web_server()
 
 def main():
