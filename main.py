@@ -636,7 +636,7 @@ async def handle_health_check(request):
     return web.Response(text="OK", status=200)
 
 async def start_web_server():
-    port = int(os.get_env("PORT", 8080))
+    port = int(os.getenv("PORT", 8080))
     app = web.Application()
     app.router.add_get("/", handle_health_check)
     app.router.add_get("/health", handle_health_check)
