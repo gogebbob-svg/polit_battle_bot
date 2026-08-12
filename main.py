@@ -626,6 +626,10 @@ async def start_web_server():
 
 # -------------------- Main --------------------
 
+async def on_startup(app: Application):
+    # Запускаємо вебсервер під час старт-апу бота в правильному event loop
+    await start_web_server()
+
 def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN environment variable is missing.")
@@ -634,7 +638,7 @@ def main():
 
     init_db()
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(on_startup).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", menu))
@@ -643,9 +647,6 @@ def main():
     app.add_handler(CommandHandler("clearmem", clear_memory_cmd))
     app.add_handler(CallbackQueryHandler(callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-
-    loop = asyncio.get_event_loop()
-    loop.create_task(start_web_server())
 
     log.info("Bot started successfully!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
